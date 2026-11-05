@@ -2,9 +2,14 @@
 # Edite este arquivo para incluir veículos, páginas e ajustar a pontuação.
 # Não precisa mexer no código Python para isso.
 
+# Só entram na planilha matérias publicadas nas últimas X horas.
+# Matérias sem horário de publicação identificado entram (com "Publicado em" vazio)
+# para nenhum furo escapar.
+janela_horas: 24
+
 # Quantos artigos novos, no máximo, terão a página aberta por execução
 # (para ler título oficial, linha fina e horário de publicação).
-max_artigos_por_execucao: 150
+max_artigos_por_execucao: 300
 
 # Links que contenham qualquer um destes trechos são descartados.
 excluir_links:
