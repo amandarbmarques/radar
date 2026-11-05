@@ -23,7 +23,7 @@ import os
 import re
 import sys
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
@@ -165,14 +165,28 @@ def ler_metas(pagina_html):
     return metas
 
 
-def formatar_data(valor):
+def ler_data(valor):
     try:
         dt = datetime.fromisoformat(valor.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return ""
+    except (ValueError, AttributeError):
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=TZ)
-    return dt.astimezone(TZ).strftime("%Y-%m-%d %H:%M")
+    return dt.astimezone(TZ)
+
+
+RE_DATA_LINK = re.compile(r"/(\d{4})/(\d{2})/(\d{2})/")
+
+
+def dia_do_link(url):
+    """Globo e Valor trazem o dia na URL (/2026/11/05/). Folha só traz o mês."""
+    m = RE_DATA_LINK.search(url)
+    if not m:
+        return None
+    try:
+        return datetime(int(m[1]), int(m[2]), int(m[3]), tzinfo=TZ).date()
+    except ValueError:
+        return None
 
 
 async def completar_artigo(context, item, sem):
@@ -192,7 +206,9 @@ async def completar_artigo(context, item, sem):
     item["linha_fina"] = metas.get("og:description") or metas.get("description") or ""
     data = (metas.get("article:published_time") or metas.get("datepublished")
             or (RE_JSONLD_DATA.search(pagina) or [None, ""])[1])
-    item["publicado"] = formatar_data(data) if data else ""
+    dt = ler_data(data) if data else None
+    item["publicado_dt"] = dt
+    item["publicado"] = dt.strftime("%Y-%m-%d %H:%M") if dt else ""
 
 
 async def coletar(cfg, ja_vistos):
@@ -209,20 +225,32 @@ async def coletar(cfg, ja_vistos):
             for url in fonte["paginas"]:
                 brutos += await coletar_pagina(context, fonte, url, excluir)
 
-        novos, vistos_agora = [], set()
+        janela = timedelta(hours=cfg.get("janela_horas", 24))
+        corte = datetime.now(TZ) - janela
+        novos, vistos_agora, velhos_pela_url = [], set(), 0
         for item in brutos:
             if item["link"] in ja_vistos or item["link"] in vistos_agora:
                 continue
             vistos_agora.add(item["link"])
-            item.update(linha_fina="", publicado="")
+            dia = dia_do_link(item["link"])
+            if dia and dia < corte.date():  # descarta sem nem abrir a matéria
+                velhos_pela_url += 1
+                continue
+            item.update(linha_fina="", publicado="", publicado_dt=None)
             novos.append(item)
 
-        limite = cfg.get("max_artigos_por_execucao", 150)
-        log(f"{len(novos)} links novos; lendo detalhes de até {limite}.")
-        sem = asyncio.Semaphore(5)
+        limite = cfg.get("max_artigos_por_execucao", 300)
+        log(f"{len(novos)} links novos ({velhos_pela_url} descartados pela data na URL); "
+            f"lendo detalhes de até {limite}.")
+        sem = asyncio.Semaphore(8)
         await asyncio.gather(*(completar_artigo(context, i, sem) for i in novos[:limite]))
         await navegador.close()
-    return novos
+
+    recentes = [i for i in novos if not i["publicado_dt"] or i["publicado_dt"] >= corte]
+    sem_data = sum(1 for i in recentes if not i["publicado_dt"])
+    log(f"{len(novos) - len(recentes)} fora da janela de {janela.total_seconds() / 3600:.0f}h descartados; "
+        f"{len(recentes)} mantidos ({sem_data} sem horário de publicação).")
+    return recentes
 
 
 # ---------------------------------------------------------------- planilha
