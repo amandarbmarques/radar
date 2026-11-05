@@ -1,0 +1,61 @@
+name: Coletar manchetes
+
+on:
+  schedule:
+    # Horários em UTC. 9h–23h UTC a cada 2h = 6h–20h em Brasília; 1h UTC = 22h.
+    - cron: "0 9-23/2 * * *"
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      testar:
+        description: "Só testar (não grava na planilha)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: coleta
+  cancel-in-progress: false
+
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Cache do navegador
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('requirements.txt') }}
+
+      - name: Instalar Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Coletar
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PLANILHA_ID: ${{ secrets.PLANILHA_ID }}
+        run: |
+          if [ "${{ inputs.testar }}" = "true" ]; then
+            python coletar_manchetes.py --testar
+          else
+            python coletar_manchetes.py
+          fi
+
+      - name: Guardar CSV da execução
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coleta-${{ github.run_number }}
+          path: coleta.csv
+          retention-days: 7
+          if-no-files-found: ignore
