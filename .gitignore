@@ -1,0 +1,3 @@
+*.json
+coleta.csv
+__pycache__/
