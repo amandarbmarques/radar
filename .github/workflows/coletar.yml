@@ -1,131 +1,61 @@
-# Configuração do coletor de manchetes / detector de furos
-# Edite este arquivo para incluir veículos, páginas e ajustar a pontuação.
-# Não precisa mexer no código Python para isso.
+name: Coletar manchetes
 
-# Só entram na planilha matérias publicadas nas últimas X horas.
-# Matérias sem horário de publicação identificado entram (com "Publicado em" vazio)
-# para nenhum furo escapar.
-janela_horas: 24
+on:
+  schedule:
+    # Horários em UTC. 9h–23h UTC a cada 2h = 6h–20h em Brasília; 1h UTC = 22h.
+    - cron: "0 9-23/2 * * *"
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      testar:
+        description: "Só testar (não grava na planilha)"
+        type: boolean
+        default: false
 
-# Quantos artigos novos, no máximo, terão a página aberta por execução
-# (para ler título oficial, linha fina e horário de publicação).
-max_artigos_por_execucao: 300
+concurrency:
+  group: coleta
+  cancel-in-progress: false
 
-# Links que contenham qualquer um destes trechos são descartados.
-excluir_links:
-  - /opiniao/
-  - /esporte/
-  - /esportes/
-  - /podcasts/
-  - /video/
-  - /videos/
-  - /fotografia/
-  - /horoscopo/
-  - /ilustrada/
-  - /f5/
-  - /cultura/
-  - /saude/
-  - /ela/
-  - /gastronomia/
+jobs:
+  coletar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
 
-fontes:
-  - veiculo: Folha
-    # www1.folha.uol.com.br/<seção>/2026/11/titulo.shtml (inclui Painel e C-Level)
-    padrao_link: '^https://(www1|c-level)\.folha\.uol\.com\.br/.+/\d{4}/\d{2}/[^/]+\.shtml$'
-    paginas:
-      - https://www1.folha.uol.com.br/poder/
-      - https://www1.folha.uol.com.br/mercado/
-      - https://www1.folha.uol.com.br/colunas/painel/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
 
-  - veiculo: O Globo
-    # oglobo.globo.com/.../noticia/2026/11/05/titulo.ghtml e blogs/.../post/2026/11/titulo.ghtml
-    padrao_link: '^https://oglobo\.globo\.com/.+/(noticia|post)/\d{4}/\d{2}/.+\.ghtml$'
-    paginas:
-      - https://oglobo.globo.com/politica/
-      - https://oglobo.globo.com/economia/
-      - https://oglobo.globo.com/blogs/lauro-jardim/
-      - https://oglobo.globo.com/blogs/bela-megale/
-      - https://oglobo.globo.com/blogs/malu-gaspar/
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
 
-  - veiculo: Valor
-    padrao_link: '^https://valor\.globo\.com/.+/noticia/\d{4}/\d{2}/\d{2}/.+\.ghtml$'
-    paginas:
-      - https://valor.globo.com/politica/
-      - https://valor.globo.com/brasil/
-      - https://valor.globo.com/financas/
-      - https://valor.globo.com/legislacao/
-      - https://valor.globo.com/ultimas-noticias/
+      - name: Cache do navegador
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('requirements.txt') }}
 
-  - veiculo: Estadão
-    # www.estadao.com.br/politica/titulo-com-varias-palavras/ (sem data na URL)
-    padrao_link: '^https://www\.estadao\.com\.br/(politica|economia)/([a-z0-9-]+/)?[a-z0-9]+(-[a-z0-9]+){4,}/?$'
-    paginas:
-      - https://www.estadao.com.br/politica/
-      - https://www.estadao.com.br/economia/
-      - https://www.estadao.com.br/politica/coluna-do-estadao/
+      - name: Instalar Chromium
+        run: python -m playwright install --with-deps chromium
 
-  # Para incluir outro veículo, copie um bloco acima e ajuste.
-  # Rode o workflow no modo "testar" para conferir se o padrão de link captura as matérias.
+      - name: Coletar
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          PLANILHA_ID: ${{ secrets.PLANILHA_ID }}
+        run: |
+          if [ "${{ inputs.testar }}" = "true" ]; then
+            python coletar_manchetes.py --testar
+          else
+            python coletar_manchetes.py
+          fi
 
-pontuacao:
-  # A partir desta pontuação o item é marcado como candidato a furo.
-  # Está baixo de propósito: o filtro serve para não deixar furo passar;
-  # a triagem fina é feita depois, na revisão.
-  minimo_candidato: 2
-
-  # "termos" casam com palavras inteiras, sem diferenciar acento ou maiúscula.
-  # "trechos_link" casam com qualquer parte do link.
-  # Cada sinal conta uma vez só por manchete.
-  sinais:
-    - nome: exclusivo
-      peso: 3
-      termos: [exclusivo, exclusiva, com exclusividade, obteve, teve acesso]
-      trechos_link: [exclusivo]
-
-    - nome: coluna de bastidor
-      peso: 2
-      trechos_link:
-        - /colunas/painel/
-        - /blogs/lauro-jardim/
-        - /blogs/bela-megale/
-        - /blogs/malu-gaspar/
-        - /blogs/capital/
-        - /coluna-do-estadao/
-        - /manoel-ventura/
-        - /fabio-graner/
-
-    - nome: antecipação
-      peso: 2
-      termos: [prepara, preparam, avalia, avaliam, estuda, estudam, planeja, planejam,
-               pretende, pretendem, cogita, articula, articulam, negocia, negociam,
-               deve, devem, devera, deverao, quer, querem, mira, busca, buscam,
-               discute, discutem, cotado, cotada, cotados, cotadas, vai propor,
-               considera, consideram, sinaliza, sinalizam, tenta, tentam, preve,
-               vai criar, vai anunciar, entra no radar, no radar, fica para depois,
-               pode ficar]
-
-    - nome: investigação/documento
-      peso: 2
-      termos: [pf, policia federal, mensagens, minuta, relatorio, documento,
-               depoimento, inquerito, delator, delacao, e-mail, conversa, dialogos,
-               pagamento, pagamentos]
-
-    - nome: bastidor interno
-      peso: 1
-      termos: [aliados, auxiliares, interlocutores, ala, fogo amigo, disputa interna,
-               racha, teme, temem, temor, insatisfacao, resiste, resistencia, divide,
-               dividem, bastidores, reservadamente]
-
-    - nome: número
-      peso: 1
-      regex: 'r\$ ?\d|\d+([.,]\d+)? ?(bi|mi|bilhao|bilhoes|milhao|milhoes|%)'
-
-    - nome: declaração de autoridade
-      peso: 1
-      termos: [diz ministro, afirma ministro, diz secretario, diz presidente,
-               diz relator, entrevista]
-
-    - nome: formato não-furo
-      peso: -3
-      termos: [ao vivo, veja, entenda, saiba, quiz, editorial, podcast, video,
-               fotos, minuto a minuto, como assistir, resultado do, analise]
+      - name: Guardar CSV da execução
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coleta-${{ github.run_number }}
+          path: coleta.csv
+          retention-days: 7
+          if-no-files-found: ignore
